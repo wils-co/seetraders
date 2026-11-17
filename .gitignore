@@ -1,0 +1,6 @@
+data.json
+public/index.html
+public/status.json
+logs/
+__pycache__/
+.DS_Store

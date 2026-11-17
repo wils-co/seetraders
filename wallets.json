@@ -1,0 +1,44 @@
+{
+  "wallets": [
+    {
+      "address": "0x7a6d5fc57f6906f337c48fe2763c3a501304f79c",
+      "label": "Gold Short Whale",
+      "style": "swing",
+      "copyable": true,
+      "enabled": true,
+      "notes": "$17.8M all-time PnL; sweeps profits frequently (low equity vs high notional)."
+    },
+    {
+      "address": "0x888e000c78b8f1aada5b3c99f880794907b76d77",
+      "label": "Broad Short Basket",
+      "style": "swing",
+      "copyable": true,
+      "enabled": true,
+      "notes": "$6.4M all-time PnL; diversified short basket across 35-40 alts."
+    },
+    {
+      "address": "0x94b227df8fe384dfa9273334c72e5efbf934599e",
+      "label": "Major Alts Short",
+      "style": "swing",
+      "copyable": true,
+      "enabled": true,
+      "notes": "$1.6M all-time PnL; concentrated 10x-20x shorts (SOL, XRP, DOGE)."
+    },
+    {
+      "address": "0xc2ba3e0583f0ea1b9c81eee804c1e3dcd16d0b69",
+      "label": "60-Pos Long/Short",
+      "style": "swing",
+      "copyable": true,
+      "enabled": true,
+      "notes": "$1.6M all-time PnL; wide 60+ position book, net short."
+    },
+    {
+      "address": "0xe31501c472d557bfa145ce105d325fb2dd4cb867",
+      "label": "HFT Scalper Bot",
+      "style": "hft",
+      "copyable": false,
+      "enabled": true,
+      "notes": "$2B+ volume, ~2,000 fills/day. Tracked for reference only; not copyable."
+    }
+  ]
+}
