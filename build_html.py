@@ -132,6 +132,14 @@ HTML_TEMPLATE = r"""<!doctype html>
     border-radius: 6px; padding: 4px 10px; font-size: 11px; cursor: pointer;
   }
   .tab-btn.active { color: var(--text); border-color: var(--blue); background: var(--blue-bg); }
+  .nav-tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+  .nav-tab {
+    background: var(--card); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .nav-tab.active { color: var(--text); border-color: var(--blue); background: var(--blue-bg); }
+  .mkt-link { color: var(--text); text-decoration: none; }
+  .mkt-link:hover { color: var(--blue); text-decoration: underline; }
   .hidden { display: none; }
   footer { color: var(--muted); font-size: 11px; text-align: center; padding: 16px 0 8px; }
 </style>
@@ -140,7 +148,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <div class="wrap">
   <header>
     <div class="brand">
-      <h1>trade.wilsco.au <span class="pill blue">Hyperliquid Top Traders</span></h1>
+      <h1>trade.wilsco.au <span class="pill blue">Top Traders</span></h1>
       <div class="sub" id="metaLine">Loading...</div>
     </div>
     <div class="controls" title="Stored locally in your browser only (never uploaded)">
@@ -155,6 +163,12 @@ HTML_TEMPLATE = r"""<!doctype html>
     </div>
   </header>
 
+  <nav class="nav-tabs">
+    <button class="nav-tab active" id="nav-hl" onclick="switchPlatform('hl')">Hyperliquid <span class="pill muted" id="hlTabCount"></span></button>
+    <button class="nav-tab" id="nav-pm" onclick="switchPlatform('pm')">Polymarket <span class="pill muted" id="pmTabCount"></span></button>
+  </nav>
+
+  <div id="view-hl">
   <div class="grid-top">
     <section class="card">
       <h2>
@@ -207,9 +221,60 @@ HTML_TEMPLATE = r"""<!doctype html>
   </div>
 
   <div id="walletsContainer"></div>
+  </div><!-- /view-hl -->
+
+  <div id="view-pm" class="hidden">
+    <div class="grid-top">
+      <section class="card">
+        <h2>
+          <span>Top Markets (Tracked Polymarket Whales)</span>
+          <span class="pill muted" id="pmSummaryCount"></span>
+        </h2>
+        <div class="kpis" id="pmKpis"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>Outcome</th>
+                <th class="num">Price</th>
+                <th class="num">Wallets</th>
+                <th class="num">Open Value</th>
+                <th class="num">uPnL</th>
+              </tr>
+            </thead>
+            <tbody id="pmTopMarketsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>
+          <span>Last 24h Trades</span>
+          <span class="pill muted" id="pmMovesCount"></span>
+        </h2>
+        <div class="table-scroll" style="max-height: 410px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Wallet</th>
+                <th>Market</th>
+                <th>Side</th>
+                <th class="num">Notional</th>
+              </tr>
+            </thead>
+            <tbody id="pmMovesBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div id="pmWalletsContainer"></div>
+  </div><!-- /view-pm -->
 
   <footer>
-    Read-only snapshot from public Hyperliquid <code>/info</code> API. Not financial advice. Copy-sizing stays in browser <code>localStorage</code>.
+    Read-only snapshot from public Hyperliquid <code>/info</code> & Polymarket Data <code>/v2</code> APIs. Not financial advice. Copy-sizing & theme stay in browser <code>localStorage</code>.
   </footer>
 </div>
 
@@ -446,10 +511,122 @@ themeBtn.addEventListener("click", () => {
   applyTheme(cur === "dark" ? "light" : "dark");
 });
 
+function renderPolymarket() {
+  const pm = DATA.polymarket || { summary: { walletCount: 0, totalOpenValue: 0, totalUpnl: 0, topMarkets: [] }, moves24h: [], wallets: [] };
+  const s = pm.summary || {};
+  document.getElementById("hlTabCount").textContent = DATA.wallets.length;
+  document.getElementById("pmTabCount").textContent = (pm.wallets || []).length;
+  document.getElementById("pmSummaryCount").textContent = `${s.walletCount || 0} tracked`;
+
+  const kpis = [
+    { k: "Tracked Whales", v: String(s.walletCount || 0), cls: "" },
+    { k: "Combined Open Value", v: fmtUsd(s.totalOpenValue || 0), cls: "" },
+    { k: "Open uPnL", v: fmtUsd(s.totalUpnl || 0), cls: clsPnL(s.totalUpnl || 0) },
+  ];
+  document.getElementById("pmKpis").innerHTML = kpis
+    .map(x => `<div class="kpi"><div class="k">${x.k}</div><div class="v mono ${x.cls}">${x.v}</div></div>`)
+    .join("");
+
+  const trunc = (str, n = 48) => (str && str.length > n ? str.slice(0, n - 1) + "…" : (str || "—"));
+  const mktUrl = (slug) => slug ? `https://polymarket.com/event/${slug}` : "https://polymarket.com";
+
+  document.getElementById("pmTopMarketsBody").innerHTML = (s.topMarkets || []).map(m => `
+    <tr>
+      <td title="${(m.title || "").replace(/"/g, "&quot;")}"><a class="mkt-link" href="${mktUrl(m.eventSlug)}" target="_blank" rel="noopener">${trunc(m.title, 44)}</a></td>
+      <td><span class="pill ${m.outcome === "Yes" ? "green" : m.outcome === "No" ? "red" : "blue"}">${m.outcome}</span></td>
+      <td class="num mono">${(m.currentPrice * 100).toFixed(1)}¢</td>
+      <td class="num mono">${m.wallets}</td>
+      <td class="num mono">${fmtUsd(m.totalValue)}</td>
+      <td class="num mono ${clsPnL(m.uPnl)}">${fmtUsd(m.uPnl)}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="6" style="color:var(--muted)">No open markets</td></tr>`;
+
+  const moves = pm.moves24h || [];
+  document.getElementById("pmMovesCount").textContent = `${moves.length} events`;
+  document.getElementById("pmMovesBody").innerHTML = moves.length ? moves.map(m => {
+    const t = new Date(m.lastTime * 1000).toLocaleTimeString("en-AU", { timeZone: "Australia/Melbourne", hour: "2-digit", minute: "2-digit" });
+    const sCls = m.side === "BUY" ? "pos" : "neg";
+    return `
+      <tr>
+        <td class="mono" style="color:var(--muted)">${t}</td>
+        <td>${m.label}</td>
+        <td title="${(m.title || "").replace(/"/g, "&quot;")}"><a class="mkt-link" href="${mktUrl(m.eventSlug)}" target="_blank" rel="noopener">${trunc(m.title, 34)}</a> <span style="color:var(--muted)">(${m.outcome})</span></td>
+        <td class="mono ${sCls}">${m.side} <span style="color:var(--muted)">(${m.fills}x)</span></td>
+        <td class="num mono">${fmtUsd(m.notional)}</td>
+      </tr>
+    `;
+  }).join("") : `<tr><td colspan="5" style="color:var(--muted)">No trades in last 24h</td></tr>`;
+
+  document.getElementById("pmWalletsContainer").innerHTML = (pm.wallets || []).map(w => {
+    const rankStr = w.monthRank ? `#${w.monthRank} 30d` : "conviction";
+    const posRows = (w.positions || []).length ? w.positions.map(p => `
+      <tr>
+        <td title="${(p.title || "").replace(/"/g, "&quot;")}"><a class="mkt-link" href="${mktUrl(p.eventSlug)}" target="_blank" rel="noopener">${trunc(p.title, 52)}</a></td>
+        <td><span class="pill ${p.outcome === "Yes" ? "green" : p.outcome === "No" ? "red" : "blue"}">${p.outcome}</span></td>
+        <td class="num mono">${fmtUsd(p.currentValue)}</td>
+        <td class="num mono">${(p.avgPrice * 100).toFixed(1)}¢</td>
+        <td class="num mono">${(p.currentPrice * 100).toFixed(1)}¢</td>
+        <td class="num mono ${clsPnL(p.uPnl)}">${fmtUsd(p.uPnl)}</td>
+        <td class="num mono ${clsPnL(p.pctPnl)}">${p.pctPnl > 0 ? "+" : ""}${p.pctPnl}%</td>
+        <td class="mono" style="color:var(--muted)">${p.endDate || "—"}</td>
+      </tr>
+    `).join("") : `<tr><td colspan="8" style="color:var(--muted)">No open positions</td></tr>`;
+
+    return `
+      <section class="card">
+        <div class="wallet-head">
+          <div class="wallet-title">
+            <strong>${w.label}</strong>
+            <span class="mono" style="color:var(--muted)">${shortAddr(w.address)}</span>
+            <span class="pill green">${rankStr}</span>
+            <a href="https://polymarket.com/profile/${w.address}" target="_blank" rel="noopener">Polymarket Profile ↗</a>
+          </div>
+          <div class="mono" style="font-size:12px;">
+            ${w.monthPnl !== null ? `30d: <span class="${clsPnL(w.monthPnl)}">${fmtUsd(w.monthPnl)}</span> · ` : ""}
+            ${w.monthVol !== null ? `30d Vol: <span>${fmtUsd(w.monthVol)}</span> · ` : ""}
+            ${w.allPnl !== null ? `All: <strong class="${clsPnL(w.allPnl)}">${fmtUsd(w.allPnl)}</strong>` : ""}
+          </div>
+        </div>
+        ${w.notes ? `<div class="wallet-notes">${w.notes}</div>` : ""}
+        <div class="kpis">
+          <div class="kpi"><div class="k">Open Value</div><div class="v mono">${fmtUsd(w.openValue)}</div></div>
+          <div class="kpi"><div class="k">Cost Basis</div><div class="v mono">${fmtUsd(w.totalCost)}</div></div>
+          <div class="kpi"><div class="k">Unrealized PnL</div><div class="v mono ${clsPnL(w.uPnl)}">${fmtUsd(w.uPnl)}</div></div>
+          <div class="kpi"><div class="k">Open Markets</div><div class="v mono">${w.openPosCount}</div></div>
+          <div class="kpi"><div class="k">24h Trades</div><div class="v mono">${w.trades24hCount}</div></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th><th>Outcome</th><th class="num">Value</th><th class="num">Avg Px</th>
+                <th class="num">Curr Px</th><th class="num">uPnL</th><th class="num">ROI</th><th>Ends</th>
+              </tr>
+            </thead>
+            <tbody>${posRows}</tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }).join("");
+}
+
+window.switchPlatform = (which) => {
+  const isPm = which === "pm";
+  document.getElementById("view-hl").classList.toggle("hidden", isPm);
+  document.getElementById("view-pm").classList.toggle("hidden", !isPm);
+  document.getElementById("nav-hl").classList.toggle("active", !isPm);
+  document.getElementById("nav-pm").classList.toggle("active", isPm);
+  localStorage.setItem("tw_platform", which);
+};
+
 renderMeta();
 renderConsensus();
 renderMoves();
 renderWallets();
+renderPolymarket();
+const initPlat = location.hash === "#polymarket" ? "pm" : (localStorage.getItem("tw_platform") || "hl");
+switchPlatform(initPlat);
 </script>
 </body>
 </html>

@@ -14,37 +14,46 @@ from pathlib import Path
 from typing import Any
 
 API_URL = "https://api.hyperliquid.xyz/info"
+POLY_API_URL = "https://data-api.polymarket.com/v2"
 ROOT = Path(__file__).resolve().parent
 WALLETS_PATH = ROOT / "wallets.json"
 OUT_PATH = ROOT / "data.json"
 
 
-def post_info(payload: dict[str, Any], retries: int = 2) -> Any:
-    """POST to Hyperliquid /info with urllib and curl fallback for macOS SSL."""
-    body = json.dumps(payload).encode("utf-8")
+def _request_json(url: str, body: bytes | None = None, retries: int = 2) -> Any:
+    """HTTP GET/POST JSON with urllib and curl fallback for macOS SSL."""
+    headers = {"User-Agent": "trade.wilsco.au/1.0"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            req = urllib.request.Request(
-                API_URL,
-                data=body,
-                headers={"Content-Type": "application/json", "User-Agent": "trade.wilsco.au/1.0"},
-            )
+            req = urllib.request.Request(url, data=body, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.URLError as exc:
             if "CERTIFICATE_VERIFY_FAILED" in str(exc):
-                out = subprocess.check_output(
-                    ["curl", "-sS", "-X", "POST", API_URL, "-H", "Content-Type: application/json", "-d", body.decode("utf-8")],
-                    timeout=15,
-                )
+                cmd = ["curl", "-sS", url]
+                if body is not None:
+                    cmd = ["curl", "-sS", "-X", "POST", url, "-H", "Content-Type: application/json", "-d", body.decode("utf-8")]
+                out = subprocess.check_output(cmd, timeout=15)
                 return json.loads(out.decode("utf-8"))
             last_err = exc
         except Exception as exc:
             last_err = exc
         if attempt < retries:
             time.sleep(0.5 * (attempt + 1))
-    raise RuntimeError(f"Hyperliquid API failed for {payload.get('type')}: {last_err}")
+    raise RuntimeError(f"Request failed for {url}: {last_err}")
+
+
+def post_info(payload: dict[str, Any], retries: int = 2) -> Any:
+    """POST to Hyperliquid /info."""
+    return _request_json(API_URL, body=json.dumps(payload).encode("utf-8"), retries=retries)
+
+
+def get_json(url: str, retries: int = 2) -> Any:
+    """GET JSON from URL."""
+    return _request_json(url, body=None, retries=retries)
 
 
 def compute_max_dd(pnl_history: list[list[Any]]) -> float:
@@ -273,21 +282,187 @@ def build_consensus(wallets: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def fetch_polymarket_leaderboard(period: str) -> dict[str, dict[str, Any]]:
+    """Fetch top 50 leaderboard entries keyed by lowercase user_id."""
+    try:
+        res = get_json(f"{POLY_API_URL}/leaderboard?category=OVERALL&timePeriod={period}&orderBy=PNL&limit=50")
+        return {
+            item["user_id"].lower(): item
+            for item in res.get("data", [])
+            if item.get("user_id")
+        }
+    except Exception:
+        return {}
+
+
+def gather_polymarket(cfg: dict[str, Any], since_s: int, errors: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fetch Polymarket positions, 24h trades, and leaderboard stats."""
+    enabled = [w for w in cfg.get("polymarket_wallets", []) if w.get("enabled", True)]
+    lb_month = fetch_polymarket_leaderboard("MONTH")
+    lb_all = fetch_polymarket_leaderboard("ALL")
+
+    wallets_out = []
+    all_moves = []
+    markets: dict[str, dict[str, Any]] = {}
+
+    for meta in enabled:
+        addr = meta["address"].lower()
+        label = meta.get("label", addr[:10])
+        try:
+            pos_res = get_json(f"{POLY_API_URL}/positions?user={addr}&limit=25&sortBy=CURRENT")
+            raw_pos = pos_res.get("data", [])
+            trades_res = get_json(f"{POLY_API_URL}/trades?user={addr}&limit=100")
+            raw_trades = trades_res.get("data", [])
+        except Exception as exc:
+            errors.append({"address": addr, "source": "polymarket", "error": str(exc)})
+            print(f"WARN: polymarket failed {addr}: {exc}", file=sys.stderr)
+            continue
+
+        positions = []
+        total_val = 0.0
+        total_cost = 0.0
+        total_upnl = 0.0
+        for p in raw_pos:
+            if p.get("status") != "OPEN":
+                continue
+            val = float(p.get("current_value", 0))
+            if val < 10:
+                continue
+            cost = float(p.get("total_cost_usdc", 0))
+            upnl = float(p.get("unrealized_pnl", 0))
+            total_val += val
+            total_cost += cost
+            total_upnl += upnl
+
+            title = p.get("title", "?")
+            outcome = p.get("outcome", "?")
+            positions.append(
+                {
+                    "title": title,
+                    "outcome": outcome,
+                    "eventSlug": p.get("event_slug", p.get("slug", "")),
+                    "currentValue": round(val, 2),
+                    "totalCost": round(cost, 2),
+                    "avgPrice": round(float(p.get("avg_price", 0)), 4),
+                    "currentPrice": round(float(p.get("current_price", 0)), 4),
+                    "uPnl": round(upnl, 2),
+                    "pctPnl": round(float(p.get("percent_pnl", 0)), 1),
+                    "endDate": p.get("end_date", ""),
+                }
+            )
+
+            m_key = f"{title}||{outcome}"
+            m = markets.setdefault(
+                m_key,
+                {
+                    "title": title,
+                    "outcome": outcome,
+                    "eventSlug": p.get("event_slug", p.get("slug", "")),
+                    "totalValue": 0.0,
+                    "uPnl": 0.0,
+                    "wallets": 0,
+                    "currentPrice": round(float(p.get("current_price", 0)), 4),
+                },
+            )
+            m["totalValue"] += val
+            m["uPnl"] += upnl
+            m["wallets"] += 1
+
+        positions.sort(key=lambda x: x["currentValue"], reverse=True)
+
+        # Aggregate last 24h trades by (title, outcome, side)
+        buckets: dict[tuple[str, str, str], dict[str, Any]] = {}
+        trades_24h = 0
+        for t in raw_trades:
+            ts = int(t.get("timestamp", 0))
+            if ts < since_s:
+                continue
+            trades_24h += 1
+            title = t.get("title", "?")
+            outcome = t.get("outcome", "?")
+            side = t.get("side", "BUY")
+            notional = float(t.get("size", 0)) * float(t.get("price", 0))
+            key = (title, outcome, side)
+            b = buckets.setdefault(
+                key,
+                {
+                    "label": label,
+                    "address": addr,
+                    "title": title,
+                    "outcome": outcome,
+                    "eventSlug": t.get("event_slug", t.get("slug", "")),
+                    "side": side,
+                    "notional": 0.0,
+                    "fills": 0,
+                    "lastTime": 0,
+                },
+            )
+            b["notional"] += notional
+            b["fills"] += 1
+            if ts > b["lastTime"]:
+                b["lastTime"] = ts
+
+        for b in buckets.values():
+            b["notional"] = round(b["notional"], 2)
+            all_moves.append(b)
+
+        m_info = lb_month.get(addr, {})
+        a_info = lb_all.get(addr, {})
+        wallets_out.append(
+            {
+                "address": addr,
+                "label": label,
+                "style": meta.get("style", "conviction"),
+                "notes": meta.get("notes", ""),
+                "openValue": round(total_val, 2),
+                "totalCost": round(total_cost, 2),
+                "uPnl": round(total_upnl, 2),
+                "openPosCount": len(positions),
+                "trades24hCount": trades_24h,
+                "monthPnl": round(float(m_info.get("pnl", 0)), 2) if m_info else None,
+                "monthVol": round(float(m_info.get("volume", 0)), 2) if m_info else None,
+                "monthRank": m_info.get("rank"),
+                "allPnl": round(float(a_info.get("pnl", 0)), 2) if a_info else None,
+                "positions": positions[:25],
+            }
+        )
+
+    all_moves.sort(key=lambda x: x["lastTime"], reverse=True)
+    top_markets = []
+    for m in markets.values():
+        m["totalValue"] = round(m["totalValue"], 2)
+        m["uPnl"] = round(m["uPnl"], 2)
+        top_markets.append(m)
+    top_markets.sort(key=lambda x: x["totalValue"], reverse=True)
+
+    return {
+        "summary": {
+            "walletCount": len(wallets_out),
+            "totalOpenValue": round(sum(w["openValue"] for w in wallets_out), 2),
+            "totalUpnl": round(sum(w["uPnl"] for w in wallets_out), 2),
+            "topMarkets": top_markets[:15],
+        },
+        "moves24h": all_moves[:60],
+        "wallets": wallets_out,
+    }
+
+
 def main() -> int:
     cfg = json.loads(WALLETS_PATH.read_text(encoding="utf-8"))
     enabled = [w for w in cfg.get("wallets", []) if w.get("enabled", True)]
 
     now_dt = datetime.now(timezone.utc)
-    since_ms = int(now_dt.timestamp() * 1000) - 86_400_000
+    now_s = int(now_dt.timestamp())
+    since_ms = now_s * 1000 - 86_400_000
     mids = post_info({"type": "allMids"})
 
     wallets_out = []
-    errors = []
+    errors: list[dict[str, Any]] = []
     for w in enabled:
         try:
             wallets_out.append(fetch_wallet(w, mids, since_ms))
         except Exception as exc:
-            errors.append({"address": w.get("address"), "error": str(exc)})
+            errors.append({"address": w.get("address"), "source": "hyperliquid", "error": str(exc)})
             print(f"WARN: failed {w.get('address')}: {exc}", file=sys.stderr)
 
     all_moves = []
@@ -295,18 +470,24 @@ def main() -> int:
         all_moves.extend(w.pop("moves24h", []))
     all_moves.sort(key=lambda x: x["lastTime"], reverse=True)
 
+    polymarket = gather_polymarket(cfg, now_s - 86_400, errors)
+
     payload = {
         "generatedAt": now_dt.isoformat(),
         "generatedMs": int(now_dt.timestamp() * 1000),
         "consensus": build_consensus(wallets_out),
         "moves24h": all_moves[:60],
         "wallets": wallets_out,
+        "polymarket": polymarket,
         "errors": errors,
     }
 
     OUT_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(f"Wrote {OUT_PATH.name}: {len(wallets_out)} wallets, {len(all_moves)} 24h moves, {len(errors)} errors")
-    return 0 if wallets_out else 1
+    print(
+        f"Wrote {OUT_PATH.name}: {len(wallets_out)} HL wallets, "
+        f"{len(polymarket['wallets'])} PM wallets, {len(errors)} errors"
+    )
+    return 0 if (wallets_out or polymarket["wallets"]) else 1
 
 
 if __name__ == "__main__":
