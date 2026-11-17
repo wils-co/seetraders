@@ -33,9 +33,9 @@ def _request_json(url: str, body: bytes | None = None, retries: int = 2) -> Any:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.URLError as exc:
             if "CERTIFICATE_VERIFY_FAILED" in str(exc):
-                cmd = ["curl", "-sS", url]
+                cmd = ["curl", "-fsS", url]
                 if body is not None:
-                    cmd = ["curl", "-sS", "-X", "POST", url, "-H", "Content-Type: application/json", "-d", body.decode("utf-8")]
+                    cmd = ["curl", "-fsS", "-X", "POST", url, "-H", "Content-Type: application/json", "-d", body.decode("utf-8")]
                 out = subprocess.check_output(cmd, timeout=15)
                 return json.loads(out.decode("utf-8"))
             last_err = exc
@@ -309,7 +309,7 @@ def gather_polymarket(cfg: dict[str, Any], since_s: int, errors: list[dict[str, 
         addr = meta["address"].lower()
         label = meta.get("label", addr[:10])
         try:
-            pos_res = get_json(f"{POLY_API_URL}/positions?user={addr}&limit=25&sortBy=CURRENT")
+            pos_res = get_json(f"{POLY_API_URL}/positions?user={addr}&limit=50")
             raw_pos = pos_res.get("data", [])
             trades_res = get_json(f"{POLY_API_URL}/trades?user={addr}&limit=100")
             raw_trades = trades_res.get("data", [])
