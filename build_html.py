@@ -25,6 +25,7 @@ HTML_TEMPLATE = r"""<!doctype html>
     --card: #121722;
     --card-2: #171d2b;
     --border: #232b3d;
+    --row-border: rgba(35, 43, 61, 0.55);
     --text: #e6edf3;
     --muted: #8b949e;
     --green: #2ea043;
@@ -36,6 +37,28 @@ HTML_TEMPLATE = r"""<!doctype html>
     --blue: #58a6ff;
     --blue-bg: rgba(88, 166, 255, 0.14);
   }
+  :root[data-theme="light"] {
+    --bg: #f6f8fa;
+    --card: #ffffff;
+    --card-2: #f0f3f6;
+    --border: #d0d7de;
+    --row-border: rgba(208, 215, 222, 0.7);
+    --text: #1f2328;
+    --muted: #59636e;
+    --green: #1a7f37;
+    --green-bg: rgba(26, 127, 55, 0.12);
+    --red: #cf222e;
+    --red-bg: rgba(207, 34, 46, 0.12);
+    --amber: #9a6700;
+    --amber-bg: rgba(154, 103, 0, 0.12);
+    --blue: #0969da;
+    --blue-bg: rgba(9, 105, 218, 0.12);
+  }
+  .theme-btn {
+    background: var(--card-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; font-size: 11px; font-weight: 600; cursor: pointer;
+  }
+  .theme-btn:hover { border-color: var(--blue); }
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -90,7 +113,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  td { padding: 6px 8px; border-bottom: 1px solid rgba(35,43,61,0.55); white-space: nowrap; }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--row-border); white-space: nowrap; }
   tr:last-child td { border-bottom: none; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
   .pos { color: var(--green); }
@@ -128,6 +151,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         <input id="maxLev" type="number" min="0.5" max="50" step="0.5" value="2" />
       </label>
       <span id="freshBadge" class="pill muted">—</span>
+      <button id="themeToggle" class="theme-btn" type="button" title="Toggle dark/light mode">☀ Light</button>
     </div>
   </header>
 
@@ -409,6 +433,18 @@ window.switchTab = (idx, which, btn) => {
 
 eqInput.addEventListener("input", () => { localStorage.setItem("tw_equity", eqInput.value); renderWallets(); });
 levInput.addEventListener("input", () => { localStorage.setItem("tw_maxlev", levInput.value); renderWallets(); });
+
+const themeBtn = document.getElementById("themeToggle");
+function applyTheme(t) {
+  document.documentElement.setAttribute("data-theme", t);
+  themeBtn.textContent = t === "light" ? "🌙 Dark" : "☀ Light";
+  localStorage.setItem("tw_theme", t);
+}
+applyTheme(localStorage.getItem("tw_theme") || "dark");
+themeBtn.addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  applyTheme(cur === "dark" ? "light" : "dark");
+});
 
 renderMeta();
 renderConsensus();
